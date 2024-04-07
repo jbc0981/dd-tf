@@ -1,0 +1,113 @@
+---
+
+name: Terraform plan
+
+on:
+  pull_request:
+
+permissions:
+  id-token: write # This is required for requesting the JWT
+  contents: read # This is required for actions/checkout
+  pull-requests: write # This is required for adding comments to the PR
+
+jobs:
+  
+  plan:
+    name: "Plan"
+    runs-on: ubuntu-latest
+
+    env:
+      # verbosity setting for Terraform logs
+      # TF_LOG: INFO
+      AWS_REGION: us-east-1
+      AWS_ACCOUNT_ID: '012345678910'
+      DEPLOYMENT_KEY: 'datadog-terraform'
+      DEPLOYMENT_DESC: '### **Deployment** ###'
+
+    steps:
+      - name: Checkout the repository to the runner
+        uses: actions/checkout@v3
+
+      - name: Setup Terraform with specified version on the runner
+        uses: hashicorp/setup-terraform@v2
+        with:
+          terraform_version: 1.3.9
+
+      - name: Configure aws credentials
+        uses: aws-actions/configure-aws-credentials@v1
+        with:
+          role-to-assume: arn:aws:iam::${{ env.AWS_ACCOUNT_ID }}:role/GithubActionsTFStateUser
+          role-session-name: GitHubActions
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Terraform Validate
+        id: format
+        run: terraform validate -no-color
+
+      - uses: mshick/add-pr-comment@v2
+        with:
+          message-id: ${{ env.DEPLOYMENT_KEY }}-plan
+          message: |
+            ${{ env.DEPLOYMENT_DESC }}
+
+            ... Running plan ...
+
+      - name: Terraform plan
+        id: plan
+        run: |
+          cd deployment \
+          && terraform init \
+          && terraform plan -input=false -no-color -out="/tmp/tfplan" \
+          && terraform show -no-color "/tmp/tfplan"
+        env:
+          DD_API_KEY: ${{ secrets.DD_API_KEY }}
+          DD_APP_KEY: ${{ secrets.DD_APP_KEY }}
+          DD_API_URL: "https://api.datadoghq.com"
+        continue-on-error: true
+
+      - uses: mshick/add-pr-comment@v2
+        if: steps.plan.outcome == 'success'
+        with:
+          message-id: ${{ env.DEPLOYMENT_KEY }}-plan
+          message: |
+            ${{ env.DEPLOYMENT_DESC }}
+
+            Plan:
+
+            ```diff
+            ${{ steps.plan.outputs.stdout }}
+            ```
+
+            *Pushed by: @${{ github.actor }}*
+
+      - name: Post plan failure
+        if: steps.plan.outcome == 'failure'
+        uses: mshick/add-pr-comment@v2
+        with:
+          message-id: ${{ env.DEPLOYMENT_KEY }}-plan
+          message: |
+            ${{ env.DEPLOYMENT_DESC }}
+
+            Plan failed:
+
+            ```
+            ${{ steps.plan.outputs.stderr }}
+            ```
+
+            *Pushed by: @${{ github.actor }}*
+
+      - if: steps.plan.outcome == 'failure'
+        run: exit 1
+
+      - name: Clean deployment for artifact name
+        run: |
+          MODULE="${{ env.DEPLOYMENT_KEY }}"
+          echo "SANITIZED=${MODULE//[\/:]/-}" >> "$GITHUB_ENV"
+
+      - name: Save plan output as artifact
+        id: save-artifact
+        uses: actions/upload-artifact@v3
+        with:
+          name: ${{ github.event.number }}-${{ env.SANITIZED }}-tf-plan
+          path: /tmp/tfplan
+  

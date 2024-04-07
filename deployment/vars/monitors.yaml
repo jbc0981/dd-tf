@@ -1,0 +1,17 @@
+web_error:
+  name: Web Errors
+  type: log alert
+  query: "logs(\"source:web-errors (status:(error OR emergency) OR @http.status_code:>=500)\").index(\"*\").rollup(\"count\").by(\"environment\").last(\"5m\") > 0"
+  message: "{{#is_alert}}\n@web-errors-slack \n{{/is_alert}}"
+  critical_threshold: 0
+  include_tags: true
+  restricted_roles:
+  additional_tags:
+    - service:webservice
+  enable_logs_sample: true
+  groupby_simple_monitor: false
+  new_group_delay: 60
+  notify_audit: false
+  on_missing_data: "default"
+  priority:
+  require_full_window: false
